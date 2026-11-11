@@ -352,10 +352,10 @@
     openDialog({
       title: existing ? 'Edit task' : 'New task',
       body: `
-        <label>Task name<input name="name" required value="${esc(t.name)}" placeholder="e.g. Splice case @ 123 Scarborough St"></label>
         <div class="chips">
           ${['Splice Case', 'Terminal', 'Pedestal', 'Ring Cut'].map((s) => `<button type="button" class="chip" data-suggest="${s}">${s}</button>`).join('')}
         </div>
+        <label>Task name<input name="name" required value="${esc(t.name)}" placeholder="Tap a shortcut above or type a name"></label>
         <label>Notes (address, pole #, fiber count…)<textarea name="notes" rows="2">${esc(t.notes)}</textarea></label>`,
       foot: `
         ${existing ? `<button type="button" class="btn danger" id="deleteTask">Delete</button><span class="grow"></span>` : ''}
@@ -363,11 +363,11 @@
         <button type="submit" class="btn primary">${existing ? 'Save' : 'Add task'}</button>`,
     }, (d) => {
       const f = d.querySelector('form');
-      f.name.focus();
+      // Don't pop the keyboard for a new task: the shortcuts can name it in one tap.
+      if (existing) f.name.focus();
       d.querySelectorAll('[data-suggest]').forEach((b) => b.addEventListener('click', () => {
-        const n = p.tasks.filter((x) => x.name.startsWith(b.dataset.suggest)).length + 1;
+        const n = p.tasks.filter((x) => x !== existing && x.name.startsWith(b.dataset.suggest)).length + 1;
         f.name.value = `${b.dataset.suggest} ${n}`;
-        f.name.focus();
       }));
       if (existing) {
         d.querySelector('#deleteTask').addEventListener('click', () => {
