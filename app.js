@@ -22,6 +22,12 @@
     };
   }
 
+  // Keep a task's billing codes in code order, whatever order they were added in.
+  const byCode = (a, b) => String(a.code).localeCompare(String(b.code), 'en', { numeric: true });
+  function sortItems(t) {
+    if (Array.isArray(t.items)) t.items.sort(byCode);
+  }
+
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -31,7 +37,10 @@
       return {
         settings: { ...base.settings, ...(data.settings || {}) },
         rates: Array.isArray(data.rates) ? data.rates : base.rates,
-        projects: Array.isArray(data.projects) ? data.projects : [],
+        projects: (Array.isArray(data.projects) ? data.projects : []).map((p) => {
+          (p.tasks || []).forEach(sortItems);
+          return p;
+        }),
       };
     } catch (e) {
       console.error('Could not load saved data', e);
@@ -84,7 +93,7 @@
         map.set(key, row);
       }
     }
-    return [...map.values()].sort((a, b) => a.code.localeCompare(b.code));
+    return [...map.values()].sort(byCode);
   }
 
   // Dialog with a title bar, scrolling body and a fixed button row.
@@ -408,6 +417,7 @@
         else {
           it = { id: uid(), code: r.code, desc: r.desc, price: r.price, qty: 1 };
           t.items.push(it);
+          sortItems(t);
         }
         save();
         b.querySelector('.count').textContent = it.qty;
