@@ -71,7 +71,8 @@
   const findProject = (id) => state.projects.find((p) => p.id === id);
   const findRate = (code) => state.rates.find((r) => r.code === code);
 
-  const STATUS_LABEL = { active: 'In progress', complete: 'Complete', invoiced: 'Invoiced', paid: 'Paid' };
+  const STATUS_LABEL = { active: 'Active', complete: 'Complete', invoiced: 'Invoiced', paid: 'Paid' };
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
   function codeSummary(p) {
     const map = new Map();
@@ -86,17 +87,43 @@
     return [...map.values()].sort((a, b) => a.code.localeCompare(b.code));
   }
 
-  function openDialog(html, onMount) {
-    $dialog.innerHTML = html;
+  // Dialog with a title bar, scrolling body and a fixed button row.
+  // A close event can arrive late (after the next dialog has already opened),
+  // so only run the handler once the dialog is really closed.
+  let onDialogClose = null;
+  $dialog.addEventListener('close', () => {
+    if ($dialog.open || !onDialogClose) return;
+    const cb = onDialogClose;
+    onDialogClose = null;
+    cb();
+  });
+
+  function openDialog({ title, sub = '', body, foot, form = true, flush = false, onClose = null }, onMount) {
+    onDialogClose = onClose;
+    const tag = form ? 'form method="dialog"' : 'div';
+    $dialog.innerHTML = `
+      <${tag} class="sheet">
+        <div class="sheet-head"><h2>${title}</h2>${sub ? `<span class="sub">${sub}</span>` : ''}</div>
+        <div class="sheet-body form${flush ? ' flush' : ''}">${body}</div>
+        <div class="sheet-foot">${foot}</div>
+      </${form ? 'form' : 'div'}>`;
     $dialog.showModal();
     $dialog.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => $dialog.close()));
     if (onMount) onMount($dialog);
   }
 
   // ---------- Router ----------
+  // route() runs on navigation (and resets scroll); render() redraws in place.
   function route() {
-    const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
     window.scrollTo(0, 0);
+    render();
+  }
+
+  function render() {
+    const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+    const tab = parts[0] === 'settings' ? 'settings' : 'projects';
+    document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === tab));
+    $app.classList.remove('has-bar');
     if (parts[0] === 'project' && parts[1]) {
       const p = findProject(parts[1]);
       if (!p) return renderNotFound();
@@ -108,66 +135,82 @@
   }
 
   function renderNotFound() {
-    $app.innerHTML = `<div class="card"><p>Project not found.</p><a class="btn" href="#/">Back to projects</a></div>`;
+    $app.innerHTML = `<div class="empty">Project not found.</div><a class="btn" href="#/">Back to projects</a>`;
   }
 
   // ---------- Projects list ----------
   function renderProjects() {
     const projects = [...state.projects].sort((a, b) => (b.created || '').localeCompare(a.created || ''));
     const setupNeeded = !state.settings.yourName && !state.settings.business;
+    const sum = (statuses) => round2(projects.filter((p) => statuses.includes(p.status)).reduce((s, p) => s + projectTotal(p), 0));
     $app.innerHTML = `
-      ${setupNeeded ? `<div class="notice">Tip: add your name and contact info in <a href="#/settings">Settings</a> so it shows up on your invoices.</div>` : ''}
-      <div class="row-between">
-        <h1>Projects</h1>
-        <button class="btn primary" id="addProject">+ Add Project</button>
+      <div class="page-head">
+        <h1 class="grow">Projects</h1>
+        <button class="btn primary" id="addProject">+ New project</button>
       </div>
-      ${projects.length === 0 ? `<div class="empty">No projects yet. Tap <b>+ Add Project</b> to get started.</div>` : ''}
-      <div class="list">
+      ${setupNeeded ? `<div class="notice">Add your name and contact info in <a href="#/settings">Settings</a> so it shows on invoices.</div>` : ''}
+      ${projects.length === 0 ? `<div class="empty">No projects yet. Tap <b>+ New project</b> to start.</div>` : `
+      <div class="stats">
+        <div><div class="k">Unbilled</div><div class="v">${money(sum(['active', 'complete']))}</div></div>
+        <div><div class="k">Invoiced</div><div class="v">${money(sum(['invoiced']))}</div></div>
+        <div><div class="k">Paid</div><div class="v">${money(sum(['paid']))}</div></div>
+      </div>
+      <div class="plist">
         ${projects.map((p) => `
-          <a class="card project-card" href="#/project/${p.id}">
-            <div class="row-between">
-              <div>
-                <div class="title">${esc(p.name)}</div>
-                <div class="muted">${p.location ? esc(p.location) + ' · ' : ''}${p.tasks.length} task${p.tasks.length === 1 ? '' : 's'} · started ${fmtDate(p.created)}</div>
-              </div>
-              <div class="right">
-                <div class="amount">${money(projectTotal(p))}</div>
-                <span class="badge ${p.status}">${STATUS_LABEL[p.status] || p.status}</span>
-              </div>
-            </div>
+          <a class="prow" href="#/project/${p.id}">
+            <span class="grow">
+              <span class="prow-name">${esc(p.name)}</span>
+              <span class="prow-meta sub">${p.location ? esc(p.location) + ' · ' : ''}${plural(p.tasks.length, 'task')} · ${fmtDate(p.created)}</span>
+            </span>
+            <span class="prow-side">
+              <span class="amount">${money(projectTotal(p))}</span>
+              <span class="badge ${p.status}">${STATUS_LABEL[p.status] || p.status}</span>
+            </span>
           </a>`).join('')}
-      </div>
+      </div>`}
     `;
     document.getElementById('addProject').addEventListener('click', () => projectDialog());
   }
 
   function projectDialog(existing) {
     const p = existing || { name: '', location: '', notes: '' };
-    openDialog(`
-      <form method="dialog" class="form">
-        <h2>${existing ? 'Edit Project' : 'New Project'}</h2>
+    openDialog({
+      title: existing ? 'Edit project' : 'New project',
+      body: `
         <label>Project name<input name="name" required value="${esc(p.name)}" placeholder="e.g. Scarborough St"></label>
-        <label>Location / city<input name="location" value="${esc(p.location)}" placeholder="e.g. Columbus, OH"></label>
-        <label>Job / PO number (optional)<input name="po" value="${esc(p.po || '')}"></label>
-        <label>Notes<textarea name="notes" rows="2">${esc(p.notes)}</textarea></label>
-        <div class="actions">
-          <button type="button" class="btn" data-close>Cancel</button>
-          <button type="submit" class="btn primary">${existing ? 'Save' : 'Create'}</button>
+        <div class="grid2">
+          <label>Location / city<input name="location" value="${esc(p.location)}" placeholder="e.g. Columbus, OH"></label>
+          <label>Job / PO # (optional)<input name="po" value="${esc(p.po || '')}"></label>
         </div>
-      </form>`, (d) => {
+        <label>Notes<textarea name="notes" rows="2">${esc(p.notes)}</textarea></label>`,
+      foot: `
+        ${existing ? `<button type="button" class="btn danger" id="deleteProject">Delete</button><span class="grow"></span>` : ''}
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">${existing ? 'Save' : 'Create'}</button>`,
+    }, (d) => {
       const f = d.querySelector('form');
       f.name.focus();
+      if (existing) {
+        d.querySelector('#deleteProject').addEventListener('click', () => {
+          if (!confirm(`Delete project "${existing.name}" and all its tasks? This cannot be undone.`)) return;
+          state.projects = state.projects.filter((x) => x !== existing);
+          save();
+          d.close();
+          location.hash = '#/';
+        });
+      }
       f.addEventListener('submit', (e) => {
         e.preventDefault();
         const name = f.name.value.trim();
         if (!name) return;
+        const fields = { name, location: f.location.value.trim(), po: f.po.value.trim(), notes: f.notes.value.trim() };
         if (existing) {
-          Object.assign(existing, { name, location: f.location.value.trim(), po: f.po.value.trim(), notes: f.notes.value.trim() });
+          Object.assign(existing, fields);
           save();
           d.close();
-          route();
+          render();
         } else {
-          const np = { id: uid(), name, location: f.location.value.trim(), po: f.po.value.trim(), notes: f.notes.value.trim(), status: 'active', created: today(), tasks: [] };
+          const np = { id: uid(), ...fields, status: 'active', created: today(), tasks: [] };
           state.projects.push(np);
           save();
           d.close();
@@ -180,53 +223,41 @@
   // ---------- Project detail ----------
   function renderProject(p) {
     const locked = p.status === 'invoiced' || p.status === 'paid';
+    const meta = [p.location && esc(p.location), p.po && 'PO ' + esc(p.po), 'Started ' + fmtDate(p.created)].filter(Boolean).join(' · ');
+    $app.classList.add('has-bar');
     $app.innerHTML = `
-      <a href="#/" class="back">&larr; All projects</a>
-      <div class="card">
-        <div class="row-between">
-          <div>
-            <h1>${esc(p.name)}</h1>
-            <div class="muted">${p.location ? esc(p.location) + ' · ' : ''}${p.po ? 'PO ' + esc(p.po) + ' · ' : ''}started ${fmtDate(p.created)}</div>
-            ${p.notes ? `<div class="muted small">${nl2br(p.notes)}</div>` : ''}
-          </div>
-          <div class="right">
-            <div class="amount big">${money(projectTotal(p))}</div>
-            <select id="status" class="status-select">
-              ${Object.entries(STATUS_LABEL).map(([k, v]) => `<option value="${k}" ${p.status === k ? 'selected' : ''}>${v}</option>`).join('')}
-            </select>
-          </div>
+      <div class="page-head">
+        <a href="#/" class="back" aria-label="All projects">&lsaquo;</a>
+        <div class="grow">
+          <h1>${esc(p.name)}</h1>
+          <div class="sub">${meta}</div>
         </div>
-        <div class="actions wrap">
-          <button class="btn" id="editProject">Edit</button>
-          <a class="btn primary" href="#/project/${p.id}/invoice">Create Invoice</a>
-          <button class="btn danger" id="deleteProject">Delete</button>
-        </div>
-        ${locked ? `<div class="notice small">This project is marked ${STATUS_LABEL[p.status].toLowerCase()}. Change the status to edit tasks.</div>` : ''}
+        <button class="btn sm" id="editProject">Edit</button>
+      </div>
+      ${p.notes ? `<div class="sub phead-notes">${nl2br(p.notes)}</div>` : ''}
+      <div class="seg" role="radiogroup" aria-label="Project status">
+        ${Object.entries(STATUS_LABEL).map(([k, v]) => `<button type="button" role="radio" class="${k}" data-status="${k}" aria-checked="${p.status === k}">${v}</button>`).join('')}
       </div>
 
-      <div class="row-between">
-        <h2>Tasks</h2>
-        ${locked ? '' : `<button class="btn primary" id="addTask">+ Add Task</button>`}
-      </div>
-      ${p.tasks.length === 0 ? `<div class="empty">No tasks yet. Add a task for each splice case or terminal.</div>` : ''}
-      <div class="list">
-        ${p.tasks.map((t, i) => renderTask(p, t, i, locked)).join('')}
+      <div class="sec-head"><h2>Tasks · ${p.tasks.length}</h2>${locked ? `<span class="sub">Locked – set Active or Complete to edit</span>` : ''}</div>
+      ${p.tasks.length === 0 ? `<div class="empty">No tasks yet. Add one for each splice case or terminal.</div>` : ''}
+      ${p.tasks.map((t, i) => renderTask(t, i, locked)).join('')}
+
+      <div class="bar no-print">
+        <div class="bar-in">
+          <div class="grow"><div class="k">Project total</div><div class="v">${money(projectTotal(p))}</div></div>
+          ${locked ? '' : `<button class="btn primary" id="addTask">+ Task</button>`}
+          <a class="btn${locked ? ' primary' : ''}" href="#/project/${p.id}/invoice">Invoice</a>
+        </div>
       </div>
     `;
 
-    document.getElementById('status').addEventListener('change', (e) => {
-      p.status = e.target.value;
+    $app.querySelectorAll('[data-status]').forEach((b) => b.addEventListener('click', () => {
+      p.status = b.dataset.status;
       save();
-      route();
-    });
+      render();
+    }));
     document.getElementById('editProject').addEventListener('click', () => projectDialog(p));
-    document.getElementById('deleteProject').addEventListener('click', () => {
-      if (confirm(`Delete project "${p.name}" and all its tasks? This cannot be undone.`)) {
-        state.projects = state.projects.filter((x) => x !== p);
-        save();
-        location.hash = '#/';
-      }
-    });
     if (!locked) document.getElementById('addTask').addEventListener('click', () => taskDialog(p));
 
     $app.querySelectorAll('[data-task]').forEach((el) => {
@@ -238,89 +269,77 @@
         const copy = { ...t, id: uid(), name: t.name + ' (copy)', items: t.items.map((it) => ({ ...it, id: uid() })) };
         p.tasks.splice(p.tasks.indexOf(t) + 1, 0, copy);
         save();
-        route();
-      });
-      el.querySelector('[data-act="del-task"]').addEventListener('click', () => {
-        if (confirm(`Delete task "${t.name}"?`)) {
-          p.tasks = p.tasks.filter((x) => x !== t);
-          save();
-          route();
-        }
+        render();
       });
       el.querySelectorAll('[data-item]').forEach((row) => {
         const it = t.items.find((x) => x.id === row.dataset.item);
         const setQty = (q) => {
           q = Math.max(0, Math.round(q * 100) / 100);
           if (q === 0) {
-            if (!confirm(`Remove ${it.code} from this task?`)) return route();
+            if (!confirm(`Remove ${it.code} from this task?`)) return render();
             t.items = t.items.filter((x) => x !== it);
           } else {
             it.qty = q;
           }
           save();
-          route();
+          render();
         };
         row.querySelector('[data-act="minus"]').addEventListener('click', () => setQty(it.qty - 1));
         row.querySelector('[data-act="plus"]').addEventListener('click', () => setQty(it.qty + 1));
-        row.querySelector('input').addEventListener('change', (e) => setQty(parseFloat(e.target.value) || 0));
+        const input = row.querySelector('input');
+        input.addEventListener('focus', () => input.select());
+        input.addEventListener('change', (e) => setQty(parseFloat(e.target.value) || 0));
       });
     });
   }
 
-  function renderTask(p, t, i, locked) {
+  function renderTask(t, i, locked) {
     return `
-      <div class="card task" data-task="${t.id}">
-        <div class="row-between">
-          <div>
-            <div class="title">${i + 1}. ${esc(t.name)}</div>
-            ${t.notes ? `<div class="muted small">${nl2br(t.notes)}</div>` : ''}
-          </div>
-          <div class="amount">${money(taskTotal(t))}</div>
-        </div>
-        ${t.items.length ? `
-        <table class="items">
-          <tbody>
-            ${t.items.map((it) => `
-              <tr data-item="${it.id}">
-                <td class="code">${esc(it.code)}</td>
-                <td class="desc">${esc(it.desc)}<div class="muted small">${money(it.price)} each</div></td>
-                <td class="qty">
-                  ${locked ? `<span>${it.qty}</span>` : `
-                  <div class="stepper">
-                    <button type="button" data-act="minus" aria-label="Decrease">&minus;</button>
-                    <input type="number" inputmode="decimal" min="0" step="1" value="${it.qty}" aria-label="Quantity">
-                    <button type="button" data-act="plus" aria-label="Increase">+</button>
-                  </div>`}
-                </td>
-                <td class="line">${money(itemTotal(it))}</td>
-              </tr>`).join('')}
-          </tbody>
-        </table>` : `<div class="muted small pad">No billing codes yet.</div>`}
+      <section class="task" data-task="${t.id}">
+        <header class="task-head">
+          <span class="task-n">${i + 1}</span>
+          <span class="task-name">${esc(t.name)}</span>
+          <span class="task-amt">${money(taskTotal(t))}</span>
+        </header>
+        ${t.notes ? `<div class="task-notes sub">${nl2br(t.notes)}</div>` : ''}
+        ${t.items.length ? t.items.map((it) => `
+          <div class="item" data-item="${it.id}">
+            <div>
+              <div><span class="code">${esc(it.code)}</span> <span class="each">@ ${money(it.price)}</span></div>
+              <div class="item-desc sub" title="${esc(it.desc)}">${esc(it.desc)}</div>
+            </div>
+            ${locked ? `<span class="item-qty">× ${it.qty}</span>` : `
+            <div class="stepper">
+              <button type="button" data-act="minus" aria-label="Decrease ${esc(it.code)}">&minus;</button>
+              <input type="number" inputmode="decimal" min="0" step="1" value="${it.qty}" aria-label="${esc(it.code)} quantity">
+              <button type="button" data-act="plus" aria-label="Increase ${esc(it.code)}">+</button>
+            </div>`}
+            <div class="item-line">${money(itemTotal(it))}</div>
+          </div>`).join('') : `<div class="none sub">No billing codes yet.</div>`}
         ${locked ? '' : `
-        <div class="actions wrap">
-          <button class="btn primary small" data-act="add-code">+ Add Code</button>
-          <button class="btn small" data-act="edit-task">Edit</button>
-          <button class="btn small" data-act="dup-task">Duplicate</button>
-          <button class="btn small danger" data-act="del-task">Delete</button>
-        </div>`}
-      </div>`;
+        <footer class="task-foot">
+          <button class="btn primary sm" data-act="add-code">+ Add code</button>
+          <button class="btn sm" data-act="edit-task">Edit</button>
+          <button class="btn sm" data-act="dup-task">Copy</button>
+        </footer>`}
+      </section>`;
   }
 
   function taskDialog(p, existing) {
     const t = existing || { name: '', notes: '' };
-    openDialog(`
-      <form method="dialog" class="form">
-        <h2>${existing ? 'Edit Task' : 'New Task'}</h2>
+    openDialog({
+      title: existing ? 'Edit task' : 'New task',
+      body: `
         <label>Task name<input name="name" required value="${esc(t.name)}" placeholder="e.g. Splice case @ 123 Scarborough St"></label>
         <div class="chips">
           ${['Splice Case', 'Terminal', 'Pedestal', 'Ring Cut'].map((s) => `<button type="button" class="chip" data-suggest="${s}">${s}</button>`).join('')}
         </div>
-        <label>Notes (address, pole #, fiber count…)<textarea name="notes" rows="2">${esc(t.notes)}</textarea></label>
-        <div class="actions">
-          <button type="button" class="btn" data-close>Cancel</button>
-          <button type="submit" class="btn primary">${existing ? 'Save' : 'Add Task'}</button>
-        </div>
-      </form>`, (d) => {
+        <label>Notes (address, pole #, fiber count…)<textarea name="notes" rows="2">${esc(t.notes)}</textarea></label>`,
+      foot: `
+        ${existing ? `<button type="button" class="btn danger" id="deleteTask">Delete</button><span class="grow"></span>` : ''}
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">${existing ? 'Save' : 'Add task'}</button>`,
+    }, (d) => {
       const f = d.querySelector('form');
       f.name.focus();
       d.querySelectorAll('[data-suggest]').forEach((b) => b.addEventListener('click', () => {
@@ -328,6 +347,15 @@
         f.name.value = `${b.dataset.suggest} ${n}`;
         f.name.focus();
       }));
+      if (existing) {
+        d.querySelector('#deleteTask').addEventListener('click', () => {
+          if (!confirm(`Delete task "${existing.name}"?`)) return;
+          p.tasks = p.tasks.filter((x) => x !== existing);
+          save();
+          d.close();
+          render();
+        });
+      }
       f.addEventListener('submit', (e) => {
         e.preventDefault();
         const name = f.name.value.trim();
@@ -337,13 +365,14 @@
           existing.notes = f.notes.value.trim();
           save();
           d.close();
-          route();
+          render();
         } else {
           const nt = { id: uid(), name, notes: f.notes.value.trim(), items: [] };
           p.tasks.push(nt);
           save();
           d.close();
-          route();
+          render();
+          window.scrollTo(0, document.body.scrollHeight);
           codePicker(p, nt);
         }
       });
@@ -351,26 +380,27 @@
   }
 
   function codePicker(p, t) {
-    openDialog(`
-      <div class="form">
-        <h2>Add billing codes</h2>
-        <div class="muted small">Task: ${esc(t.name)} — tap a code to add 1. Tap again to add more.</div>
-        <div class="code-list">
-          ${state.rates.map((r) => {
-            const cur = t.items.find((x) => x.code === r.code);
-            return `
-            <button type="button" class="code-btn" data-code="${esc(r.code)}">
-              <span class="code">${esc(r.code)}</span>
-              <span class="desc">${esc(r.desc)}</span>
-              <span class="price">${money(r.price)}</span>
-              <span class="count">${cur ? '×' + cur.qty : ''}</span>
-            </button>`;
-          }).join('')}
-        </div>
-        <div class="actions">
-          <button type="button" class="btn primary" data-close>Done</button>
-        </div>
-      </div>`, (d) => {
+    openDialog({
+      title: 'Add codes',
+      sub: esc(t.name) + ' — tap to add 1',
+      form: false,
+      flush: true,
+      onClose: render,
+      body: state.rates.map((r) => {
+        const cur = t.items.find((x) => x.code === r.code);
+        return `
+          <button type="button" class="code-btn" data-code="${esc(r.code)}">
+            <span class="code">${esc(r.code)}</span>
+            <span class="desc">${esc(r.desc)}</span>
+            <span class="price">${money(r.price)}</span>
+            <span class="count">${cur ? cur.qty : ''}</span>
+          </button>`;
+      }).join(''),
+      foot: `<span class="grow amount" id="pickTotal" style="align-self:center"></span><button type="button" class="btn primary" data-close>Done</button>`,
+    }, (d) => {
+      const total = d.querySelector('#pickTotal');
+      const showTotal = () => { total.textContent = 'Task ' + money(taskTotal(t)); };
+      showTotal();
       d.querySelectorAll('[data-code]').forEach((b) => b.addEventListener('click', () => {
         const r = findRate(b.dataset.code);
         let it = t.items.find((x) => x.code === r.code);
@@ -380,12 +410,12 @@
           t.items.push(it);
         }
         save();
-        b.querySelector('.count').textContent = '×' + it.qty;
+        b.querySelector('.count').textContent = it.qty;
+        showTotal();
         b.classList.remove('flash');
         void b.offsetWidth;
         b.classList.add('flash');
       }));
-      d.addEventListener('close', () => route(), { once: true });
     });
   }
 
@@ -401,29 +431,32 @@
     const total = projectTotal(p);
     const showDetail = p.invoice.showDetail !== false;
     const from = [s.business, s.yourName].filter(Boolean);
+    const billed = p.status === 'invoiced' || p.status === 'paid';
 
     $app.innerHTML = `
       <div class="no-print">
-        <a href="#/project/${p.id}" class="back">&larr; Back to ${esc(p.name)}</a>
-        <div class="card form">
-          <div class="grid2">
-            <label>Invoice #<input id="invNum" value="${esc(p.invoice.number)}"></label>
-            <label>Invoice date<input id="invDate" type="date" value="${esc(p.invoice.date)}"></label>
-          </div>
-          <label class="check"><input type="checkbox" id="invDetail" ${showDetail ? 'checked' : ''}> Include task-by-task breakdown</label>
-          <div class="actions wrap">
-            <button class="btn primary" id="print">Print / Save as PDF</button>
-            <button class="btn" id="csv">Download CSV</button>
-            ${p.status !== 'invoiced' && p.status !== 'paid' ? `<button class="btn" id="markInvoiced">Mark as Invoiced</button>` : ''}
-          </div>
-          <div class="muted small">On a phone: tap Print, then choose “Save as PDF” (Android) or use the Share button (iPhone) to send it to your contractor.</div>
+        <div class="page-head">
+          <a href="#/project/${p.id}" class="back" aria-label="Back to ${esc(p.name)}">&lsaquo;</a>
+          <div class="grow"><h1>Invoice</h1><div class="sub">${esc(p.name)}</div></div>
+          <span class="badge ${p.status}">${STATUS_LABEL[p.status] || p.status}</span>
         </div>
+        <div class="grid2">
+          <label class="f">Invoice #<input id="invNum" value="${esc(p.invoice.number)}"></label>
+          <label class="f">Date<input id="invDate" type="date" value="${esc(p.invoice.date)}"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="invDetail" ${showDetail ? 'checked' : ''}> Include task-by-task breakdown</label>
+        <div class="btn-row" style="margin:0.25rem 0 0.375rem">
+          <button class="btn primary grow" id="print">Print / PDF</button>
+          <button class="btn" id="csv">CSV</button>
+          ${billed ? '' : `<button class="btn" id="markInvoiced">Mark invoiced</button>`}
+        </div>
+        <div class="sub" style="margin-bottom:0.5rem">Phone: tap Print, then “Save as PDF” (Android) or Share (iPhone).</div>
       </div>
 
       <article class="invoice">
         <header class="inv-head">
           <div>
-            ${from.length ? `<div class="inv-from-name">${esc(from[0])}</div>` : `<div class="inv-from-name muted">Your name (set in Settings)</div>`}
+            ${from.length ? `<div class="inv-from-name">${esc(from[0])}</div>` : `<div class="inv-from-name">Your name (set in Settings)</div>`}
             ${from[1] ? `<div>${esc(from[1])}</div>` : ''}
             ${s.address ? `<div>${nl2br(s.address)}</div>` : ''}
             ${s.phone ? `<div>${esc(s.phone)}</div>` : ''}
@@ -432,7 +465,7 @@
           <div class="right">
             <div class="inv-title">INVOICE</div>
             <table class="meta">
-              <tr><td>Invoice #</td><td>${esc(p.invoice.number)}</td></tr>
+              <tr><td>No.</td><td>${esc(p.invoice.number)}</td></tr>
               <tr><td>Date</td><td>${fmtDate(p.invoice.date)}</td></tr>
               ${s.paymentTerms ? `<tr><td>Terms</td><td>${esc(s.paymentTerms)}</td></tr>` : ''}
             </table>
@@ -450,17 +483,16 @@
             <div><b>${esc(p.name)}</b></div>
             ${p.location ? `<div>${esc(p.location)}</div>` : ''}
             ${p.po ? `<div>Job/PO: ${esc(p.po)}</div>` : ''}
-            <div>${p.tasks.length} task${p.tasks.length === 1 ? '' : 's'}</div>
+            <div>${plural(p.tasks.length, 'task')}</div>
           </div>
         </section>
 
-        <h3>Summary</h3>
         <table class="inv-table">
           <thead><tr><th>Code</th><th>Description</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
           <tbody>
             ${summary.length ? summary.map((r) => `
               <tr><td>${esc(r.code)}</td><td>${esc(r.desc)}</td><td class="num">${r.qty}</td><td class="num">${money(r.price)}</td><td class="num">${money(r.qty * r.price)}</td></tr>`).join('')
-              : `<tr><td colspan="5" class="muted">No billing codes added yet.</td></tr>`}
+              : `<tr><td colspan="5">No billing codes added yet.</td></tr>`}
           </tbody>
           <tfoot><tr><td colspan="4" class="num">Total Due</td><td class="num">${money(total)}</td></tr></tfoot>
         </table>
@@ -469,11 +501,11 @@
         <h3>Detail by Task</h3>
         ${p.tasks.map((t, i) => `
           <div class="inv-task">
-            <div class="row-between"><b>${i + 1}. ${esc(t.name)}</b><b>${money(taskTotal(t))}</b></div>
-            ${t.notes ? `<div class="muted small">${nl2br(t.notes)}</div>` : ''}
+            <div class="inv-task-head"><span>${i + 1}. ${esc(t.name)}</span><span class="num">${money(taskTotal(t))}</span></div>
+            ${t.notes ? `<div class="sub">${nl2br(t.notes)}</div>` : ''}
             <table class="inv-table compact">
               <tbody>
-                ${t.items.map((it) => `<tr><td>${esc(it.code)}</td><td>${esc(it.desc)}</td><td class="num">${it.qty} × ${money(it.price)}</td><td class="num">${money(itemTotal(it))}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">No codes</td></tr>`}
+                ${t.items.map((it) => `<tr><td>${esc(it.code)}</td><td>${esc(it.desc)}</td><td class="num">${it.qty} × ${money(it.price)}</td><td class="num">${money(itemTotal(it))}</td></tr>`).join('') || `<tr><td colspan="4">No codes</td></tr>`}
               </tbody>
             </table>
           </div>`).join('')}` : ''}
@@ -484,9 +516,9 @@
 
     const num = document.getElementById('invNum');
     const date = document.getElementById('invDate');
-    num.addEventListener('change', () => { p.invoice.number = num.value.trim(); save(); route(); });
-    date.addEventListener('change', () => { p.invoice.date = date.value || today(); save(); route(); });
-    document.getElementById('invDetail').addEventListener('change', (e) => { p.invoice.showDetail = e.target.checked; save(); route(); });
+    num.addEventListener('change', () => { p.invoice.number = num.value.trim(); save(); render(); });
+    date.addEventListener('change', () => { p.invoice.date = date.value || today(); save(); render(); });
+    document.getElementById('invDetail').addEventListener('change', (e) => { p.invoice.showDetail = e.target.checked; save(); render(); });
     document.getElementById('print').addEventListener('click', () => {
       const prev = document.title;
       document.title = `Invoice ${p.invoice.number} - ${p.name}`;
@@ -495,7 +527,7 @@
     });
     document.getElementById('csv').addEventListener('click', () => downloadCsv(p));
     const mark = document.getElementById('markInvoiced');
-    if (mark) mark.addEventListener('click', () => { p.status = 'invoiced'; save(); route(); });
+    if (mark) mark.addEventListener('click', () => { p.status = 'invoiced'; save(); render(); });
   }
 
   function downloadCsv(p) {
@@ -525,56 +557,62 @@
   function renderSettings() {
     const s = state.settings;
     $app.innerHTML = `
-      <h1>Settings</h1>
-      <form class="card form" id="settingsForm">
-        <h2>Your info (shown on invoices)</h2>
-        <div class="grid2">
-          <label>Your name<input name="yourName" value="${esc(s.yourName)}"></label>
-          <label>Business name (optional)<input name="business" value="${esc(s.business)}"></label>
-          <label>Phone<input name="phone" type="tel" value="${esc(s.phone)}"></label>
-          <label>Email<input name="email" type="email" value="${esc(s.email)}"></label>
+      <div class="page-head"><h1>Settings</h1></div>
+      <form class="panel form" id="settingsForm">
+        <div class="panel-head"><h2>Your info · on invoices</h2></div>
+        <div class="panel-body">
+          <div class="grid2">
+            <label>Your name<input name="yourName" value="${esc(s.yourName)}"></label>
+            <label>Business (optional)<input name="business" value="${esc(s.business)}"></label>
+            <label>Phone<input name="phone" type="tel" value="${esc(s.phone)}"></label>
+            <label>Email<input name="email" type="email" value="${esc(s.email)}"></label>
+          </div>
+          <label>Address<textarea name="address" rows="2">${esc(s.address)}</textarea></label>
         </div>
-        <label>Address<textarea name="address" rows="2">${esc(s.address)}</textarea></label>
-        <h2>Contractor (Bill To)</h2>
-        <label>Contractor name<input name="contractorName" value="${esc(s.contractorName)}"></label>
-        <label>Contractor address<textarea name="contractorAddress" rows="2">${esc(s.contractorAddress)}</textarea></label>
-        <div class="grid2">
-          <label>Payment terms<input name="paymentTerms" value="${esc(s.paymentTerms)}"></label>
-          <label>Next invoice #<input name="nextInvoiceNumber" inputmode="numeric" value="${esc(s.nextInvoiceNumber)}"></label>
+        <div class="panel-head"><h2>Contractor · bill to</h2></div>
+        <div class="panel-body">
+          <label>Contractor name<input name="contractorName" value="${esc(s.contractorName)}"></label>
+          <label>Contractor address<textarea name="contractorAddress" rows="2">${esc(s.contractorAddress)}</textarea></label>
+          <div class="grid2">
+            <label>Payment terms<input name="paymentTerms" value="${esc(s.paymentTerms)}"></label>
+            <label>Next invoice #<input name="nextInvoiceNumber" inputmode="numeric" value="${esc(s.nextInvoiceNumber)}"></label>
+          </div>
+          <button class="btn primary full" type="submit">Save info</button>
         </div>
-        <div class="actions"><button class="btn primary" type="submit">Save</button></div>
       </form>
 
-      <div class="card form">
-        <div class="row-between">
-          <h2>Billing codes</h2>
-          <button class="btn small" id="addRate">+ Add Code</button>
-        </div>
-        <div class="muted small">Changing a rate here only affects codes added from now on. Codes already on tasks keep the price they were added with.</div>
-        <table class="rates">
-          <thead><tr><th>Code</th><th>Description</th><th>Rate</th><th></th></tr></thead>
-          <tbody>
-            ${state.rates.map((r, i) => `
-              <tr data-rate="${i}">
-                <td><input name="code" value="${esc(r.code)}"></td>
-                <td><input name="desc" value="${esc(r.desc)}"></td>
-                <td><input name="price" type="number" step="0.01" inputmode="decimal" value="${r.price}"></td>
-                <td><button class="btn small danger" data-act="del-rate" aria-label="Delete">✕</button></td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-        <div class="actions wrap">
-          <button class="btn primary" id="saveRates">Save codes</button>
-          <button class="btn" id="resetRates">Reset to rate sheet</button>
+      <div class="panel">
+        <div class="panel-head"><h2>Billing codes</h2></div>
+        <div class="panel-body">
+          <p class="sub">New rates apply to codes added from now on. Codes already on tasks keep their price.</p>
+          <table class="rates">
+            <thead><tr><th>Code</th><th>Description</th><th>Rate $</th><th></th></tr></thead>
+            <tbody>
+              ${state.rates.map((r, i) => `
+                <tr data-rate="${i}">
+                  <td><input name="code" value="${esc(r.code)}" aria-label="Code"></td>
+                  <td><input name="desc" value="${esc(r.desc)}" aria-label="Description"></td>
+                  <td><input name="price" type="number" step="0.01" inputmode="decimal" value="${r.price}" aria-label="Rate"></td>
+                  <td><button class="btn sm danger" data-act="del-rate" aria-label="Delete ${esc(r.code)}">✕</button></td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+          <div class="btn-row" style="margin-top:0.375rem">
+            <button class="btn primary grow" id="saveRates">Save codes</button>
+            <button class="btn" id="addRate">+ Code</button>
+            <button class="btn" id="resetRates">Reset</button>
+          </div>
         </div>
       </div>
 
-      <div class="card form">
-        <h2>Backup</h2>
-        <div class="muted small">Your data is saved on this device only. Download a backup now and then, and use it to move your data to another phone or computer.</div>
-        <div class="actions wrap">
-          <button class="btn" id="exportData">Download backup</button>
-          <label class="btn">Restore from backup<input type="file" id="importData" accept="application/json,.json" hidden></label>
+      <div class="panel">
+        <div class="panel-head"><h2>Backup</h2></div>
+        <div class="panel-body">
+          <p class="sub">Data is saved on this device only. Download a backup now and then; restore it to move to another phone or computer.</p>
+          <div class="btn-row">
+            <button class="btn grow" id="exportData">Download backup</button>
+            <label class="btn grow">Restore backup<input type="file" id="importData" accept="application/json,.json" hidden></label>
+          </div>
         </div>
       </div>
     `;

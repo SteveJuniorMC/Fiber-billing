@@ -1,5 +1,5 @@
 // Offline support: serve the app from cache, update in the background.
-const CACHE = 'fiber-billing-v1';
+const CACHE = 'fiber-billing-v2';
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'rates.js', 'manifest.json', 'icon.svg'];
 
 self.addEventListener('install', (e) => {
