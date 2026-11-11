@@ -230,6 +230,9 @@
   }
 
   // ---------- Project detail ----------
+  // Tasks start collapsed; ids in here are the ones currently expanded.
+  const openTasks = new Set();
+
   function renderProject(p) {
     const locked = p.status === 'invoiced' || p.status === 'paid';
     const meta = [p.location && esc(p.location), p.po && 'PO ' + esc(p.po), 'Started ' + fmtDate(p.created)].filter(Boolean).join(' · ');
@@ -271,11 +274,17 @@
 
     $app.querySelectorAll('[data-task]').forEach((el) => {
       const t = p.tasks.find((x) => x.id === el.dataset.task);
-      if (!t || locked) return;
+      if (!t) return;
+      el.querySelector('.task-head').addEventListener('click', () => {
+        if (!openTasks.delete(t.id)) openTasks.add(t.id);
+        render();
+      });
+      if (locked || !openTasks.has(t.id)) return;
       el.querySelector('[data-act="add-code"]').addEventListener('click', () => codePicker(p, t));
       el.querySelector('[data-act="edit-task"]').addEventListener('click', () => taskDialog(p, t));
       el.querySelector('[data-act="dup-task"]').addEventListener('click', () => {
         const copy = { ...t, id: uid(), name: t.name + ' (copy)', items: t.items.map((it) => ({ ...it, id: uid() })) };
+        openTasks.add(copy.id);
         p.tasks.splice(p.tasks.indexOf(t) + 1, 0, copy);
         save();
         render();
@@ -303,13 +312,17 @@
   }
 
   function renderTask(t, i, locked) {
-    return `
-      <section class="task" data-task="${t.id}">
-        <header class="task-head">
+    const open = openTasks.has(t.id);
+    const head = `
+        <button type="button" class="task-head" aria-expanded="${open}">
           <span class="task-n">${i + 1}</span>
-          <span class="task-name">${esc(t.name)}</span>
+          <span class="task-name">${esc(t.name)}${open ? '' : ` <span class="task-count">· ${plural(t.items.length, 'code')}</span>`}</span>
           <span class="task-amt">${money(taskTotal(t))}</span>
-        </header>
+          <span class="task-chev" aria-hidden="true">${open ? '&#9662;' : '&#9656;'}</span>
+        </button>`;
+    if (!open) return `<section class="task" data-task="${t.id}">${head}</section>`;
+    return `
+      <section class="task" data-task="${t.id}">${head}
         ${t.notes ? `<div class="task-notes sub">${nl2br(t.notes)}</div>` : ''}
         ${t.items.length ? t.items.map((it) => `
           <div class="item" data-item="${it.id}">
@@ -378,6 +391,7 @@
         } else {
           const nt = { id: uid(), name, notes: f.notes.value.trim(), items: [] };
           p.tasks.push(nt);
+          openTasks.add(nt.id);
           save();
           d.close();
           render();

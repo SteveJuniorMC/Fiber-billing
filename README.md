@@ -6,7 +6,7 @@ A simple billing app for fiber splicing work. Track your work by **project → t
 
 1. **Add a project** – e.g. "Scarborough St".
 2. **Add a task** for every splice case or terminal – e.g. "Splice Case 1 @ 123 Scarborough St".
-3. **Add billing codes** to each task – tap a code to add it, tap again to bump the quantity (handy for `S120` fusion splices). Use the +/− buttons or type a number to adjust.
+3. **Add billing codes** to each task (tasks are collapsed to one line; tap a task to open it) – tap a code to add it, tap again to bump the quantity (handy for `S120` fusion splices). Use the +/− buttons or type a number to adjust.
 4. When the job is done, set the project to **Complete** and tap **Invoice** in the bottom bar.
 5. On the invoice page tap **Print / PDF** to get a PDF to send to your contractor, or **CSV** for a spreadsheet.
 
