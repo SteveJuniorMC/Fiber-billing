@@ -692,6 +692,14 @@
   route();
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    // When an updated version takes over, reload once so it shows right away.
+    const hadWorker = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadWorker || reloaded) return;
+      reloaded = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register('sw.js').then((reg) => reg.update()).catch(() => {});
   }
 })();
